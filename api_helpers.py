@@ -109,7 +109,7 @@ def extract_comments(**kwargs):
 
         # Start off where you left off on the CSV.
         try:
-            start_utc = df['created_utc'].max()
+            start_utc = int(df['created_utc'].max())
         except:
             print("Couldn't find a midway point to start from.")
             pass
@@ -119,7 +119,7 @@ def extract_comments(**kwargs):
 
         # Make a request until successful or reaches max retries.
         while objects is None and retries < max_retries:
-            objects = send_request(**kwargs, after=start_utc)
+            objects = send_request(subreddit=kwargs['subreddit'], before=end_utc, after=start_utc)
             retries += 1
 
         if objects is None:
