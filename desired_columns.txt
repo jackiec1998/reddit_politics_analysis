@@ -1,0 +1,15 @@
+author
+body
+created_utc
+id
+is_submitter
+parent_id
+permalink
+retrieved_on
+stickied
+subreddit
+subreddit_id
+score
+locked
+link_id
+comment_type
