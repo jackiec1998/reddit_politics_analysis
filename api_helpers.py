@@ -6,8 +6,9 @@ import re
 import time
 import datetime as dt
 import pandas as pd
-import os.path as path
+import os
 import time
+import sys
 
 PUSHSHIFT_REDDIT_URL = "http://api.pushshift.io/reddit"
 
@@ -39,9 +40,9 @@ def send_request(**kwargs):
 
     if request.status_code == 200:
         response = json.loads(request.text)
-        data = response['data']
-        sorted_data_by_id = sorted(data, key=lambda x: int(x['id'], 36))
-        return sorted_data_by_id
+        return response['data']
+        # sorted_data_by_id = sorted(data, key=lambda x: int(x['id'], 36))
+        # return sorted_data_by_id
 
     else:
         print("Request was unsuccessful. Error code below.")
@@ -49,7 +50,8 @@ def send_request(**kwargs):
         return None
 
 '''
-    Necessary Parameters: 
+    Necessary Parameters:
+        'subreddit' (string): The subreddit that is going to be queried.
         'start_utc' (int): Start of the study period in UTC. Although it will
             pick up where it left off if file already exists from most recent
             UTC timestamp.
@@ -58,11 +60,20 @@ def send_request(**kwargs):
     Optional Parameters:
         'file_name' (string): Name of the CSV file (don't include .csv).
         'max_retries' (int): The maximum number of retries on a failed request
-            (default is 5).
-        Other (string): Other parameters, like 'subreddit' will be added into
-            the request.
+            (default is 5 tries).
+        'sleep_duration' (int): The seconds sleeping after an API request
+            (defaut is 0.5 seconds).
 '''
 def extract_comments(**kwargs):
+
+    '''
+        START: Intaking method and query arguments.
+    '''
+
+    if "subreddit" in kwargs.keys():
+        subreddit = kwargs['subreddit']
+    else:
+        sys.exit("The subreddit is a necessary parameter.")
 
     # Get the wanted data points from desired_columns.txt file.
     with open("desired_columns.txt") as file:
@@ -71,34 +82,48 @@ def extract_comments(**kwargs):
     # Define the file name.
     if "file_name" in kwargs.keys():
         CSV_file_name = kwargs['file_name'] + ".csv"
-        del kwargs['file_name']
-    
     else:
         CSV_file_name = "default.csv"
 
+    # See if 'new' flag is True to delete the existing referred CSV file.
+    if "new" in kwargs.keys() and os.path.exists(CSV_file_name):
+        os.remove(CSV_file_name)
+
     # Define study period.
     if "start_utc" in kwargs.keys() and "end_utc" in kwargs.keys():
-
         start_utc = kwargs['start_utc']
         end_utc = kwargs['end_utc']
 
-        # start_utc = 1604361600 # Nov. 3rd
-        # end_utc = 1604966400 # Nov. 10th
-
-    # Maximum retry attempts.
+    # Define maximum retry attempts.
     if "max_retries" in kwargs.keys():
-        max_retries = kwargs['max_retries']
-        del kwargs['max_retries']
-
+        max_retries = int(kwargs['max_retries'])
     else:
         max_retries = 5
+
+    # Define sleep duration after each request.
+    if "sleep_duration" in kwargs.keys():
+        sleep_duration = int(kwargs['sleep_duration'])
+    else:
+        sleep_duration = 0.5
+
+    '''
+        END: Intaking method and query arguments.
+    '''
+
+    '''
+        BEGIN: Pushshift API requests.
+    '''
+
+    time_requests_begin = time.time()
+
+    df = None
 
     while True:
 
         # Read the database using the right index_col.
-        if path.exists(CSV_file_name):
+        if os.path.exists(CSV_file_name) and df is None:
             df = pd.read_csv(CSV_file_name, index_col=0)
-        else:
+        elif df is None:
             df = pd.DataFrame()
 
         objects = None
@@ -115,29 +140,27 @@ def extract_comments(**kwargs):
             pass
 
         # Send request time.
-        time_sent_request = time.time()
+        request_time = time.time()
 
         # Make a request until successful or reaches max retries.
-        while objects is None and retries < max_retries:
-            objects = send_request(subreddit=kwargs['subreddit'], before=end_utc, after=start_utc)
+        while (objects is None or len(objects) == 0) and retries < max_retries:
+            print(f"Retries at: {retries}.")
+            objects = send_request(subreddit=subreddit, after=start_utc, before=end_utc)
             retries += 1
 
-        if objects is None:
+        if objects is None or len(objects) == 0:
             print("The request returned nothing, stopping extraction. " \
                 + "Check request error. Writing to CSV and exiting.")
 
             df = df.drop_duplicates()
             df.to_csv(CSV_file_name)
             
-            return
+            sys.exit()
 
-        # How long it took to get the request.
-        request_duration = time.time() - time_sent_request
-
-        print("Request returned {0} objects. It took {1} seconds.".format(len(objects), request_duration))
+        print(f"Request return {len(objects)} and took {time.time() - request_time:.2f} seconds.")
             
         # Timing formating of objects.
-        time_formatting = time.time()
+        formatting_time = time.time()
 
         # Loop through the returned data and append to dataframe.
         for object in objects:
@@ -158,9 +181,16 @@ def extract_comments(**kwargs):
 
         df.to_csv(CSV_file_name)
 
-        formatting_duration = time.time() - time_formatting
 
         # Display the number of new items, time formating, and new line.
-        print("{0} - {1} = {2} new objects have been added to the CSV.".format(df.shape[0], num_rows, df.shape[0] - num_rows))
-        print("Formating the data took {0} seconds.".format(formatting_duration))
-        print("\n")
+        print((f"{df.shape[0]} - {num_rows} = {df.shape[0] - num_rows} "
+            "new objects have been added to the CSV. "
+            f"It took {time.time() - formatting_time:.2f}."))
+
+        print(f"Sleeping for {sleep_duration} seconds.\n")
+        time.sleep(sleep_duration)
+    
+    '''
+        END: Pushshift API requests.
+    '''
+
