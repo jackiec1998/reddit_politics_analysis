@@ -9,6 +9,7 @@ import pandas as pd
 import os
 import time
 import sys
+import atexit
 
 PUSHSHIFT_REDDIT_URL = "http://api.pushshift.io/reddit"
 
@@ -31,7 +32,8 @@ def send_request(**kwargs):
 
     # Print out the parameters and readable time.
     print(params)
-    print(dt.datetime.fromtimestamp(int(kwargs['after'])).strftime('%Y-%m-%d, %H:%M:%S'))
+    date = dt.datetime.fromtimestamp(int(kwargs['after'])).strftime('%Y-%m-%d, %H:%M:%S')
+    print(f"{date} requested.")
 
     type = "comment"
 
@@ -48,6 +50,21 @@ def send_request(**kwargs):
         print("Request was unsuccessful. Error code below.")
         print(request.status_code)
         return None
+
+def save(main_df, cache_df, file_name):
+
+    if not cache_df.empty:
+        main_df = main_df.append(cache_df, ignore_index=True)
+
+        main_df = main_df.drop_duplicates()
+
+        main_df.to_csv(file_name)
+
+        return main_df
+    else:
+        print("Given cache dataframe is empty.")
+        sys.exit()
+
 
 '''
     Necessary Parameters:
@@ -66,10 +83,9 @@ def send_request(**kwargs):
 '''
 def extract_comments(**kwargs):
 
-    '''
-        START: Intaking method and query arguments.
-    '''
+    #region Intaking arguments.
 
+    # Checking if subreddit is an argument given.
     if "subreddit" in kwargs.keys():
         subreddit = kwargs['subreddit']
     else:
@@ -81,18 +97,20 @@ def extract_comments(**kwargs):
 
     # Define the file name.
     if "file_name" in kwargs.keys():
-        CSV_file_name = kwargs['file_name'] + ".csv"
+        file_name = kwargs['file_name'] + ".csv"
     else:
-        CSV_file_name = "default.csv"
+        file_name = "default.csv"
 
     # See if 'new' flag is True to delete the existing referred CSV file.
-    if "new" in kwargs.keys() and os.path.exists(CSV_file_name):
-        os.remove(CSV_file_name)
+    if "new" in kwargs.keys() and kwargs["new"] is True and os.path.exists(file_name):
+        os.remove(file_name)
 
     # Define study period.
     if "start_utc" in kwargs.keys() and "end_utc" in kwargs.keys():
         start_utc = kwargs['start_utc']
         end_utc = kwargs['end_utc']
+    else:
+        sys.exit("The study period needs to be defined using 'start_utc' and 'end_utc'.")
 
     # Define maximum retry attempts.
     if "max_retries" in kwargs.keys():
@@ -106,91 +124,138 @@ def extract_comments(**kwargs):
     else:
         sleep_duration = 0.5
 
-    '''
-        END: Intaking method and query arguments.
-    '''
+    if "cache_limit" in kwargs.keys():
+        cache_limit = int(kwargs['cache_limit'])
+    else:
+        cache_limit = 5_000
+
+    #endregion
 
     '''
-        BEGIN: Pushshift API requests.
+        Arguments that should be defined at this point:
+            - subreddit (string)
+            - desired_columns (list of strings)
+            - CSV_file_name (string)
+            - start/end_utc (string)
+            - max_retries (int)
+            - sleep_duation (float/int)
+            - cache_limit (int)
     '''
 
-    time_requests_begin = time.time()
+    #region Sending requests loop.
 
-    df = None
+    # Finding the main CSV file for the dataframe.
+    if os.path.exists(file_name):
+        main_df = pd.read_csv(file_name, index_col=0)
+    else:
+        main_df = pd.DataFrame()
+
+    # Defining the cache dataframe because writing constantly to the main dataframe is dumb.
+    cache_df = pd.DataFrame()
+
+    # Finding a midway point to start from if there exists one.
+    if not main_df.empty:
+        start_utc = int(main_df['created_utc'].max())
 
     while True:
 
-        # Read the database using the right index_col.
-        if os.path.exists(CSV_file_name) and df is None:
-            df = pd.read_csv(CSV_file_name, index_col=0)
-        elif df is None:
-            df = pd.DataFrame()
-
-        objects = None
-        retries = 0
-
-        # Used to calculate the change in size with the new request.
-        num_rows = df.shape[0]
-
-        # Start off where you left off on the CSV.
         try:
-            start_utc = int(df['created_utc'].max())
-        except:
-            print("Couldn't find a midway point to start from.")
-            pass
 
-        # Send request time.
-        request_time = time.time()
+            objects = None
+            retries = 0
 
-        # Make a request until successful or reaches max retries.
-        while (objects is None or len(objects) == 0) and retries < max_retries:
-            print(f"Retries at: {retries}.")
-            objects = send_request(subreddit=subreddit, after=start_utc, before=end_utc)
-            retries += 1
+            # Start off where you left off either in the cache of main dataframe.
+            if not cache_df.empty:
+                start_utc = int(cache_df['created_utc'].max())
+            elif not main_df.empty:
+                start_utc = int(main_df['created_utc'].max())
 
-        if objects is None or len(objects) == 0:
-            print("The request returned nothing, stopping extraction. " \
-                + "Check request error. Writing to CSV and exiting.")
+            # Send request time.
+            request_time = time.time()
 
-            df = df.drop_duplicates()
-            df.to_csv(CSV_file_name)
+            # Make a request until successful or reaches max retries.
+            while (objects is None or len(objects) == 0) and retries <= max_retries:
+                
+                if retries > 0:
+                    print(f"Retry {retries}!")
+                
+                objects = send_request(subreddit=subreddit, after=start_utc, before=end_utc)
+
+                retries += 1
+
+            if objects is None or len(objects) == 0:
+                
+                print("The request returned nothing, stopping extraction. " \
+                    + "Check request error. Writing to CSV and exiting.")
+
+
+                save(main_df, cache_df, file_name)
+                
+                sys.exit()
+
+            print(f"{len(objects)} / {time.time() - request_time:.2f} objects returned/response time.")
+                
+            # Timing formating of objects.
+            formatting_time = time.time()
+
+            # Loop through the returned data and append to dataframe.
+            for object in objects:
+
+                # The object falls out of study period.
+                if object['created_utc'] > end_utc:
+                    print("Found an object outside of study period.")
+                    continue
+
+                # Only keep the columns you want.
+                object = {key: object[key] for key in desired_columns}
+
+                # print(json.dumps(object, sort_keys=True, indent=2))
+                cache_df = cache_df.append(object, ignore_index=True)
+
+
+            # Check to clear cache.
+            if cache_df.shape[0] > cache_limit:
+                print("--- Cache hit limited. Writing to CSV file and emptying cache. ---")
+
+                main_df = save(main_df, cache_df, file_name)
+
+                cache_df = pd.DataFrame()
             
+            print(f"{cache_df.shape[0]} / {main_df.shape[0]} objects in cache/main.")
+
+
+            # Display the number of new items, time formating, and new line.
+            print((f"{time.time() - formatting_time:.2f} seconds for formatting."))
+
+            print(f"{sleep_duration} seconds for sleeping.\n")
+            time.sleep(sleep_duration)
+
+        except KeyboardInterrupt:
+            
+            print("Keyboard interruption caused program to stop. Writing to CSV file.")
+        
+            to_csv_time = time.time()
+
+            save(main_df, cache_df, file_name)
+
+            print(f"It took {time.time() - to_csv_time} seconds to write to CSV.")
+
             sys.exit()
 
-        print(f"Request return {len(objects)} and took {time.time() - request_time:.2f} seconds.")
+        except Exception as e:
             
-        # Timing formating of objects.
-        formatting_time = time.time()
+            to_csv_time = time.time()
 
-        # Loop through the returned data and append to dataframe.
-        for object in objects:
+            save(main_df, cache_df, file_name)
 
-            # The object falls out of study period.
-            if object['created_utc'] > end_utc:
-                continue
+            print(f"It took {time.time() - to_csv_time} seconds to write to CSV.")
+            
+            print("Unhandlded error message below.")
 
-            # Only keep the columns you want.
-            object = {key: object[key] for key in desired_columns}
+            print(e.message)
 
-            # print(json.dumps(object, sort_keys=True, indent=2))
-            df = df.append(object, ignore_index=True)
+            sys.exit()
 
 
-        # Removed duplicates.
-        df = df.drop_duplicates()
-
-        df.to_csv(CSV_file_name)
-
-
-        # Display the number of new items, time formating, and new line.
-        print((f"{df.shape[0]} - {num_rows} = {df.shape[0] - num_rows} "
-            "new objects have been added to the CSV. "
-            f"It took {time.time() - formatting_time:.2f}."))
-
-        print(f"Sleeping for {sleep_duration} seconds.\n")
-        time.sleep(sleep_duration)
     
-    '''
-        END: Pushshift API requests.
-    '''
-
+    #endregion
