@@ -2,6 +2,11 @@
 Repository to store analysis on Reddit data pulled from Pushshift's API.
 
 # Study Period
+
+Datasets that are being maintained.
+- `conservative_comments.csv`
+- `democrats_comments.csv`, still a work in progress. Missing Oct. comments.
+
 BEGIN: Oct. 15, 2020, 1602720000 Unix Timestamp.
 END: Jan. 15, 2021, 1610668800 Unix Timestamp.
 
