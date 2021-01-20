@@ -1,0 +1,8 @@
+datasets/ filter=lfs diff=lfs merge=lfs -text
+datasets/conservative_election_week.csv filter=lfs diff=lfs merge=lfs -text
+datasets/csgo_comments.csv filter=lfs diff=lfs merge=lfs -text
+datasets/democrats_comments_november.csv filter=lfs diff=lfs merge=lfs -text
+datasets/carleton_comments.csv filter=lfs diff=lfs merge=lfs -text
+datasets/conservative_comments.csv filter=lfs diff=lfs merge=lfs -text
+datasets/conservative_comments_before.csv filter=lfs diff=lfs merge=lfs -text
+datasets/conservative_comments_old.csv filter=lfs diff=lfs merge=lfs -text
