@@ -1,5 +1,5 @@
 # Deprecated
-Has moved to BitBucket for better large file support.
+Moved to BitBucket for better large file support.
 
 # Reddit Politics Analysis
 Repository to store analysis on Reddit data pulled from Pushshift's API.
